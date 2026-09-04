@@ -487,7 +487,6 @@ Parse &amp; Import
 </table>
 </div>
 </div>
-</div>
 </main>
 
 <footer>
@@ -807,7 +806,8 @@ const DEAD_BRAND_RX = /ESY|SMILE|FORCE-H|SIH-|SIEB|PYLON|ALPHA|SWATTEN/i;
 // ✅ FIXED: Added \b word boundary to \bEC\s?\d so it matches "EC 10" but ignores "IEC 61215"
 const BATTERY_HINT_RX = /KWH|BAT|\bEC\s?\d|SH-HM|SMILE|FORCE-H|SIH-|SIEB/i;
 const PANEL_HINT_RX = /JAM|SPDG|IEC\s?61215|LR|PANEL/i;
-const RECORD_ID_RX = /^[A-Za-z0-9]{2,4}\d{3,}/;
+const RECORD_ID_RX = /^[A-Za-z0-9]{1,4}\d{3,}$/;
+const PRODUCT_CELL_RX = /^\d+[A-Za-z][A-Za-z0-9\-\/]{2,}/;
 const KW_LINE_RX = /^(\d+(?:\.\d+)?)\s*kW\s*\+\s*(\d+(?:\.\d+)?)\s*kW$/i;
 
 function parseCRMTable(lines){
@@ -834,7 +834,7 @@ function parseCRMTable(lines){
                 if(!f) return;
                 const kwm = f.match(KW_LINE_RX);
                 if(kwm){ solarKW = parseFloat(kwm[1]); batteryKW = parseFloat(kwm[2]); return; }
-                if(RECORD_ID_RX.test(f)) productNames.push(f);
+                if(PRODUCT_CELL_RX.test(f)) productNames.push(f);
             });
         });
         if(solarKW === null || batteryKW === null) return;
@@ -861,9 +861,9 @@ function parseCRMBlocks(lines){
         const batteryKW = parseFloat(m[2]);
         const productNames = [];
         let i = kwIdx - 1;
-        while(i >= 0 && !RECORD_ID_RX.test(block[i])){
+        while(i - 1 >= 0 && /^\d+$/.test(block[i-1]) && !RECORD_ID_RX.test(block[i])){
             productNames.unshift(block[i]);
-            i--;
+            i -= 2;
         }
         const id = block[0];
         const isDead = productNames.some(p => DEAD_BRAND_RX.test(p));
@@ -878,6 +878,29 @@ function ensureProduct(name, type){
     let p = products.find(item => item.name.toLowerCase() === name.toLowerCase());
     if(!p){ p = {name, type}; products.push(p); return {p, created:true}; }
     return {p, created:false};
+}
+
+function parseSimpleLines(lines){
+    let added = 0, newProducts = 0;
+    lines.forEach(line => {
+        const numMatches = line.match(/\d+(\.\d+)?/g);
+        if(!numMatches) return;
+        const kw = parseFloat(numMatches[numMatches.length-1]);
+        if(isNaN(kw) || kw <= 0) return;
+
+        let productText = line;
+        productText = productText.replace(new RegExp('\\b'+numMatches[numMatches.length-1].replace('.','\\.')+'\\b'), '');
+        productText = productText.replace(/kw|kilowatt|units?|qty/gi, '');
+        productText = productText.replace(/\t|,|\|/g, ' ').replace(/\s{2,}/g, ' ').trim();
+        productText = productText.replace(/^[-–—:\s]+|[-–—:\s]+$/g, '');
+        if(!productText) productText = 'Unspecified';
+
+        const res = ensureProduct(productText, 'std');
+        if(res.created) newProducts++;
+        addRow(kw, res.p.name, null, 'Client', 'Active');
+        added++;
+    });
+    return {added, newProducts};
 }
 
 function parsePaste(){
@@ -907,8 +930,15 @@ function parsePaste(){
         status.textContent = `✔ Recognized ${crmRecords.length} CRM rows → added ${added} sale lines`;
         status.className = 'paste-status success';
     } else {
-        status.textContent = 'Could not parse format. Please check structure.';
-        status.className = 'paste-status';
+        const {added, newProducts} = parseSimpleLines(lines);
+        renderProducts(); renderRows(); calculate(); updateActivity();
+        if(added > 0){
+            status.textContent = `✔ Added ${added} sale line${added===1?'':'s'}` + (newProducts ? `, ${newProducts} new product${newProducts===1?'':'s'} added as Standard — check types in Products tab.` : '.');
+            status.className = 'paste-status success';
+        } else {
+            status.textContent = 'Could not parse format. Please check structure.';
+            status.className = 'paste-status';
+        }
     }
     document.getElementById('pasteBox').value = '';
 }
