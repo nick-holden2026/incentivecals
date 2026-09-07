@@ -807,7 +807,7 @@ function updateActivity(){
 /* ========== PASTE & FILE UPLOAD PARSER ========== */
 const DEAD_BRAND_RX = /ESY|SMILE|FORCE-H|SIH-|SIEB|PYLON|ALPHA|SWATTEN/i;
 // ✅ FIXED: Added \b word boundary to \bEC\s?\d so it matches "EC 10" but ignores "IEC 61215"
-const BATTERY_HINT_RX = /KWH|BAT|\bEC\s?\d|SH-HM|SMILE|FORCE-H|SIH-|SIEB/i;
+const BATTERY_HINT_RX = /KWH|\bBAT\b|\bEC\s?\d|SH-HM|SMILE|FORCE-H|SIH-|SIEB/i;
 const PANEL_HINT_RX = /JAM|SPDG|IEC\s?61215|LR|PANEL/i;
 const RECORD_ID_RX = /^[A-Za-z0-9]{1,4}\d{3,}$/;
 const PRODUCT_CELL_RX = /^\d+[A-Za-z][A-Za-z0-9\-\/]{2,}/;
