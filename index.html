@@ -675,8 +675,7 @@ function sunboostCalc(totalKw){
 function deadStockCalc(deadKw){
     const kw = Math.max(0, deadKw);
     const slabs = [
-        {label:'0-25', rate:0, from:0, to:25},
-        {label:'25-100', rate:125, from:25, to:100},
+        {label:'0-100', rate:125, from:0, to:100},
         {label:'101-200', rate:150, from:100, to:200},
         {label:'201-300', rate:175, from:200, to:300},
         {label:'Above 300', rate:200, from:300, to:Infinity}
@@ -702,6 +701,10 @@ function calculate(){
             if(prod && prod.type === 'dead') deadKw += v;
         }
     });
+    // Round away floating-point summation drift (e.g. 0.1 + 0.2 !== 0.3 in JS) before slab math,
+    // otherwise totals can land a cent or two off a slab boundary and silently under/over-pay.
+    totalKw = Math.round(totalKw * 100) / 100;
+    deadKw = Math.round(deadKw * 100) / 100;
 
     const sun = sunboostCalc(totalKw);
     const dead = deadStockCalc(deadKw);
