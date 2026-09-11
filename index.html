@@ -340,6 +340,20 @@ New Sale
 <div class="card-body"><div class="chart-wrap"><canvas id="mixChart"></canvas></div></div>
 </div>
 </div>
+<div class="charts-row" style="grid-template-columns:repeat(3,1fr);">
+<div class="card">
+<div class="card-header"><h3>Panel Mix</h3></div>
+<div class="card-body"><div class="chart-wrap" style="height:220px;"><canvas id="panelMixChart"></canvas></div></div>
+</div>
+<div class="card">
+<div class="card-header"><h3>Inverter Mix</h3></div>
+<div class="card-body"><div class="chart-wrap" style="height:220px;"><canvas id="inverterMixChart"></canvas></div></div>
+</div>
+<div class="card">
+<div class="card-header"><h3>Battery Mix</h3></div>
+<div class="card-body"><div class="chart-wrap" style="height:220px;"><canvas id="batteryMixChart"></canvas></div></div>
+</div>
+</div>
 <div class="charts-row">
 <div class="card">
 <div class="card-header"><h3>Progress to Next Bonus Tier</h3></div>
@@ -504,6 +518,7 @@ let products = [
 let entries = [];
 let rowId = 0;
 let slabChart = null, mixChart = null;
+let panelMixChart = null, inverterMixChart = null, batteryMixChart = null;
 
 /* ========== RESET DASHBOARD ========== */
 function resetDashboard() {
@@ -948,6 +963,51 @@ function parsePaste(){
     document.getElementById('pasteBox').value = '';
 }
 
+// Parses raw spreadsheet rows (array of cell values per row) directly by pattern —
+// completely ignoring column headers. This is necessary because many CRM/web exports
+// use auto-generated header names (CSS class names, UI labels, etc.) instead of real
+// column titles like "Project" or "kW", which made the old header-based lookup silently
+// find nothing and add zero rows. Reuses the exact same detection rules as the paste parsers.
+function parseUploadedRows(rows){
+    const records = [];
+    rows.forEach(row => {
+        if(!Array.isArray(row)) return;
+        const cells = row.map(c => (c===null||c===undefined) ? '' : String(c).trim());
+        const idCell = cells.find(c => RECORD_ID_RX.test(c));
+        if(!idCell) return; // not a data row (header row, blank row, etc.)
+
+        const kwIdx = cells.findIndex(c => KW_LINE_RX.test(c));
+        if(kwIdx === -1) return;
+        const m = cells[kwIdx].match(KW_LINE_RX);
+        const solarKW = parseFloat(m[1]);
+        const batteryKW = parseFloat(m[2]);
+
+        const customerName = cells[1] || 'Unknown';
+
+        // Scan adjacent cell pairs for qty+product: a bare number followed by a
+        // non-numeric, non-price, non-date, non-status cell is treated as a product line.
+        const productNames = [];
+        for(let i=0; i<cells.length-1; i++){
+            const a = cells[i], b = cells[i+1];
+            if(!/^\d+$/.test(a)) continue;
+            if(!b) continue;
+            if(/^\d+$/.test(b)) continue;
+            if(KW_LINE_RX.test(b)) continue;
+            if(/^\$\s?\d/.test(b)) continue;
+            if(/^\d{1,2}-\w{3}-\d{4}$/.test(b)) continue;
+            if(/^(active|complete|clos(e|ed)|booked|connection)/i.test(b)) continue;
+            productNames.push(b);
+        }
+
+        const isDead = productNames.some(p => DEAD_BRAND_RX.test(p));
+        const batteryProd = productNames.find(p => BATTERY_HINT_RX.test(p)) || productNames[productNames.length-1] || 'Battery';
+        const solarProd = productNames.find(p => PANEL_HINT_RX.test(p)) || productNames[0] || 'Solar';
+
+        records.push({id: idCell, customerName, solarKW, batteryKW, isDead, batteryProd, solarProd});
+    });
+    return records;
+}
+
 function handleFileUpload() {
     const fileInput = document.getElementById('fileUpload');
     const statusLabel = document.getElementById('uploadStatus');
@@ -967,27 +1027,36 @@ function handleFileUpload() {
             const workbook = XLSX.read(data, {type: 'array'});
             const firstSheetName = workbook.SheetNames[0];
             const worksheet = workbook.Sheets[firstSheetName];
-            const json = XLSX.utils.sheet_to_json(worksheet);
-            if (json.length === 0) {
+            // header:1 -> raw array-of-arrays, ignoring whatever the header row says.
+            const rows = XLSX.utils.sheet_to_json(worksheet, {header: 1, defval: ''});
+            if (rows.length === 0) {
                 statusLabel.style.color = "var(--error)";
                 statusLabel.innerText = "File is empty.";
                 return;
             }
-            let added = 0;
-            json.forEach(row => {
-                const project = row.Project || row.project || row['Project No'] || `SA${Math.floor(10000 + Math.random() * 90000)}`;
-                const name = row.Name || row.name || row['Customer Name'] || 'Customer';
-                const product = row.Product || row.product || 'Standard Panel';
-                const kw = parseFloat(row.kW || row.kw || row['kW Sold'] || 0);
-                const status = row.Status || row.status || 'Active';
-                if (kw > 0) {
-                    ensureProduct(product, 'std');
-                    addRow(kw, product, project, name, status);
+            const records = parseUploadedRows(rows);
+            if (records.length === 0) {
+                statusLabel.style.color = "var(--error)";
+                statusLabel.innerText = "Could not recognize any rows — expected a Project ID (starting with letters+digits, e.g. SA12345) and a \"X kW + Y kW\" cell in each row.";
+                return;
+            }
+            let added = 0, newProducts = 0;
+            records.forEach(r => {
+                if(r.solarKW > 0){
+                    const res = ensureProduct(r.solarProd, 'std');
+                    if(res.created) newProducts++;
+                    addRow(r.solarKW, res.p.name, r.id, r.customerName, 'Active');
+                    added++;
+                }
+                if(r.batteryKW > 0){
+                    const res = ensureProduct(r.batteryProd, r.isDead ? 'dead' : 'std');
+                    if(res.created) newProducts++;
+                    addRow(r.batteryKW, res.p.name, r.id, r.customerName, 'Active');
                     added++;
                 }
             });
             statusLabel.style.color = "var(--success)";
-            statusLabel.innerText = `Success! Added ${added} entries.`;
+            statusLabel.innerText = `Success! Recognized ${records.length} rows → added ${added} sale lines` + (newProducts ? ` (${newProducts} new products added).` : '.');
             fileInput.value = "";
             renderProducts(); renderRows(); calculate(); updateActivity();
         } catch (error) {
